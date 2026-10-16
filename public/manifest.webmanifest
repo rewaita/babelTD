@@ -1,0 +1,16 @@
+{
+  "name": "バベルTD",
+  "short_name": "バベルTD",
+  "description": "神に抗いながら無限に塔を伸ばしていく、縦画面タワーディフェンス",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0816",
+  "theme_color": "#120e22",
+  "lang": "ja",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
