@@ -25,6 +25,16 @@ npm run dev      # 開発サーバー起動 → http://localhost:5180
 - 公開用ビルド: `npm run build`（`dist/` に出力。`npm run preview` で確認）
 - アイコン画像の作り直し: `npm run icons`
 
+## GitHub Pages で公開
+
+`main` ブランチに push すると、GitHub Actions（`.github/workflows/deploy.yml`）が自動でビルドして公開する。
+テストが失敗したときは公開されない。
+
+- 初回だけ: リポジトリの **Settings → Pages → Build and deployment → Source** を「**GitHub Actions**」にする
+  （「Deploy from a branch」のままだとビルド前のソースが公開され、画面が真っ黒になる）
+- 公開URL: https://rewaita.github.io/babelTD/
+- 進行状況はリポジトリの Actions タブで確認できる
+
 ## Webアプリとしてインストール（PWA）
 
 `npm run build` した `dist/` をWebサーバー（HTTPS）に置くと、ホーム画面に追加できる。一度開けばオフラインでも遊べる。
