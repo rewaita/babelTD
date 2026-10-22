@@ -28,7 +28,7 @@ export interface EnemyDef {
   speed: number;
   /** 作業員への攻撃力（毎秒のダメージ） */
   attack: number;
-  /** 倒したときに得られるポイント */
+  /** 倒したときに得られるポイント（敵の数が多いので小さめ。大きいと資材が余る） */
   reward: number;
   /** この階数に達すると出現し始める */
   minFloor: number;
@@ -51,10 +51,10 @@ export const ENEMIES: EnemyDef[] = [
   {
     id: 'basic',
     name: '呪いの泥',
-    hp: 20,
+    hp: 30,
     speed: 0.15,
     attack: 4,
-    reward: 3,
+    reward: 1,
     minFloor: 0,
     weight: 10,
     color: 0x7b4fd6,
@@ -67,7 +67,7 @@ export const ENEMIES: EnemyDef[] = [
     hp: 12,
     speed: 0.27,
     attack: 3,
-    reward: 4,
+    reward: 1,
     minFloor: 6,
     weight: 4,
     color: 0x3fb6c9,
@@ -80,7 +80,7 @@ export const ENEMIES: EnemyDef[] = [
     hp: 18,
     speed: 0.17,
     attack: 4,
-    reward: 5,
+    reward: 2,
     minFloor: 8,
     weight: 3,
     color: 0x7fc94a,
@@ -94,7 +94,7 @@ export const ENEMIES: EnemyDef[] = [
     hp: 75,
     speed: 0.09,
     attack: 8,
-    reward: 10,
+    reward: 4,
     minFloor: 12,
     weight: 2,
     color: 0xc9483f,
@@ -107,7 +107,7 @@ export const ENEMIES: EnemyDef[] = [
     hp: 32,
     speed: 0.13,
     attack: 5,
-    reward: 8,
+    reward: 3,
     minFloor: 18,
     weight: 2,
     color: 0xe0d6f0,
@@ -121,7 +121,7 @@ export const ENEMIES: EnemyDef[] = [
     hp: 90,
     speed: 0.07,
     attack: 8,
-    reward: 35,
+    reward: 15,
     minFloor: 0,
     weight: 0,
     color: 0x5a3b8c,

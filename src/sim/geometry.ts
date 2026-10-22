@@ -20,11 +20,6 @@ export function slotS(index: number): number {
   return (index + 0.5) * SLOT_SPACING;
 }
 
-/** 穴番号 → 何階の穴か（0始まり） */
-export function slotFloor(index: number): number {
-  return Math.floor(index / TOWER.SLOTS_PER_FLOOR);
-}
-
 /** 位置の範囲 [sMin, sMax] に含まれる穴番号の範囲 [最初, 最後] を返す（最初 > 最後 なら該当なし） */
 export function slotIndexRange(sMin: number, sMax: number): [number, number] {
   // + 0 は -0 を 0 にするため

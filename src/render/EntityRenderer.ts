@@ -16,13 +16,15 @@ import { FONT } from '../ui/theme';
 import { num, t } from '../i18n/strings';
 
 /** 穴の強調表示の種類 */
-export type HighlightMode = 'ok' | 'ng' | 'source';
+export type HighlightMode = 'ok' | 'source';
 
 const P: Projected = { x: 0, y: 0, z: 0, k: 1 };
 
+/** トラップを選んでいる間、置ける穴を囲む色 */
+const PLACEABLE_COLOR = 0xffe27a;
+
 const HIGHLIGHT_COLOR: Record<HighlightMode, number> = {
   ok: 0x7dff8a,
-  ng: 0xff5a5a,
   source: 0xffd23f,
 };
 
@@ -31,6 +33,8 @@ export class EntityRenderer {
   highlight: { id: SlotId; mode: HighlightMode } | null = null;
   /** 天才をドラッグ中に、作業員をドロップ先として強調するか */
   workersHighlight = false;
+  /** トラップを選んでいる間、置ける穴を光らせるための判定（選んでいなければ null） */
+  placeable: ((id: SlotId) => boolean) | null = null;
   /** 作業員の集団の画面上の中心（タップ判定用）。見えていなければ null */
   workersCenter: { x: number; y: number } | null = null;
 
@@ -253,6 +257,20 @@ export class EntityRenderer {
   }
 
   private drawHighlight(holes: readonly HoleInfo[]): void {
+    // 置ける穴: 金色の枠と、穴の中のほのかな光（ゆっくり点滅）
+    if (this.placeable) {
+      const g = this.overlay;
+      const pulse = 0.5 + 0.5 * Math.sin(this.scene.time.now / 180);
+      for (const hole of holes) {
+        if (!this.placeable(hole.id)) continue;
+        const zk = this.view.zoom * hole.k;
+        const pad = 6 * zk;
+        g.fillStyle(PLACEABLE_COLOR, 0.12 + 0.12 * pulse);
+        g.fillRect(hole.x - hole.w / 2, hole.y - hole.h / 2, hole.w, hole.h);
+        g.lineStyle(Math.max(2.5, 5 * zk), PLACEABLE_COLOR, 0.6 + 0.4 * pulse);
+        g.strokeRoundedRect(hole.x - hole.w / 2 - pad, hole.y - hole.h / 2 - pad, hole.w + pad * 2, hole.h + pad * 2, 6);
+      }
+    }
     if (!this.highlight) return;
     const hole = holes.find((h) => h.id === this.highlight!.id);
     if (!hole) return;

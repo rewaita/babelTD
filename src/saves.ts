@@ -50,12 +50,3 @@ export function writeSave(floor: number, data: WorldSnapshot): boolean {
     }
   }
 }
-
-/** すべてのセーブを消す */
-export function clearSaves(): void {
-  try {
-    localStorage.removeItem(KEY);
-  } catch {
-    /* 保存領域が使えない環境 */
-  }
-}

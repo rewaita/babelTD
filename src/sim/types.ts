@@ -50,6 +50,8 @@ export interface SlotEffect {
   slowDecayMul: number;
   /** 与える状態異常（最大2種類） */
   statuses: StatusEffect[];
+  /** 状態異常のうち一番広い範囲（階） */
+  statusRange: number;
   /** 強制移動（2つ入っていたら移動量の大きい方） */
   force: { kind: ForceKind; distance: number; range: number } | null;
   /** 発動中のシナジー（表示用） */
@@ -63,6 +65,8 @@ export interface Slot {
   id: SlotId;
   traps: PlacedTrap[];
   effect: SlotEffect;
+  /** 系統ごとの、次に発動できるまでの残り秒数（0以下なら発動できる） */
+  cooldown: { damage: number; status: number; force: number };
   /** この時刻（ゲーム内秒）まで「発動中」の演出をする */
   activeUntil: number;
 }
@@ -113,9 +117,11 @@ export interface Enemy {
   // ---- 強制移動 ----
   /** 学習: その種類の強制移動を何回受けたか */
   forceCount: Partial<Record<ForceKind, number>>;
-  /** 今範囲内にいて、もう判定済みの強制移動の穴（範囲を出るまで再判定しない） */
-  forceSlot: SlotId | null;
 
+  /** このステップでトラップから受けるダメージ（脆化の倍率をかける前）。毎ステップ 0 に戻る */
+  pendingDamage: number;
+  /** この時刻（ゲーム内秒）まで「ダメージを受けた」色にする */
+  hurtUntil: number;
   /** 今ダメージを受けているか（描画用） */
   hurt: boolean;
   /** 作業員を攻撃中か */

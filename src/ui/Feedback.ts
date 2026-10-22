@@ -20,7 +20,8 @@ export class Toast {
       backgroundColor: '#140e26e6',
       padding: { x: 18, y: 10 },
       align: 'center',
-      wordWrap: { width: w - 80 },
+      // useAdvancedWrap: 空白のない日本語でも折り返す
+      wordWrap: { width: w - 80, useAdvancedWrap: true },
     })
       .setOrigin(0.5)
       .setDepth(DEPTH.TOAST)

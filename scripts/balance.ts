@@ -10,6 +10,7 @@
  *
  * 数値を一時的に変えて試す（設定ファイルは書き換えない）:
  *   OVERRIDE="ENEMY_SCALING.HP_MUL_PER_FLOOR=1.05,POINTS.PER_SECOND=4" npm run balance
+ *   OVERRIDE="ENEMIES.basic.hp=30,TRAPS.spike.dps=30" npm run balance
  *
  * botの遊び方（人間がやりそうなこと）:
  *   - 作業員の横の2つの穴に、最優先でダメージ系を入れる
@@ -21,20 +22,29 @@
  */
 import { World } from '../src/sim/World';
 import { TRAP_BY_ID, type TrapDef } from '../src/config/traps';
+import { ENEMY_BY_ID } from '../src/config/enemies';
 import * as BALANCE from '../src/config/balance';
 import { TOWER, WORKERS } from '../src/config/balance';
-
-// 数値の一時的な上書き（OVERRIDE="グループ.名前=値,..."）
-for (const pair of (process.env.OVERRIDE ?? '').split(',').filter(Boolean)) {
-  const [path, value] = pair.split('=');
-  const [group, key] = path.split('.');
-  const target = (BALANCE as unknown as Record<string, Record<string, number>>)[group];
-  if (!target || !(key in target)) throw new Error(`不明な設定: ${path}`);
-  target[key] = Number(value);
-  console.log(`上書き: ${path} = ${value}`);
-}
 import { slotS } from '../src/sim/geometry';
 import { WORKER_SLOT_IDS } from '../src/sim/types';
+
+// 数値の一時的な上書き（OVERRIDE="グループ.名前=値,..."）
+//   balance.ts の値 … SPAWN.BASE_INTERVAL=1.2
+//   敵・トラップ   … ENEMIES.basic.hp=30 / TRAPS.spike.dps=30
+for (const pair of (process.env.OVERRIDE ?? '').split(',').filter(Boolean)) {
+  const [path, value] = pair.split('=');
+  const parts = path.split('.');
+  const target =
+    parts[0] === 'ENEMIES'
+      ? ENEMY_BY_ID[parts[1]]
+      : parts[0] === 'TRAPS'
+        ? TRAP_BY_ID[parts[1]]
+        : (BALANCE as unknown as Record<string, object>)[parts[0]];
+  const key = parts[parts.length - 1];
+  if (!target || !(key in target)) throw new Error(`不明な設定: ${path}`);
+  (target as Record<string, number>)[key] = Number(value);
+  console.log(`上書き: ${path} = ${value}`);
+}
 
 /** 何秒ごとにbotが判断するか */
 const THINK_SEC = 0.5;
@@ -147,7 +157,7 @@ function run(seed: number): Result {
     w.update(dt);
     for (const ev of w.drainEvents()) {
       if (ev.type === 'floorReached' && ev.floor % 20 === 0) {
-        trace.push(`${ev.floor}F:${(w.time / 60).toFixed(0)}分/敵${w.enemies.length}/◆${Math.floor(w.points)}`);
+        trace.push(`${ev.floor}F:${(w.time / 60).toFixed(0)}分/敵${w.enemies.length}(集団内${w.enemies.filter((e) => e.s < w.hordeTop).length})/◆${Math.floor(w.points)}`);
       }
     }
     thinkTimer -= dt;

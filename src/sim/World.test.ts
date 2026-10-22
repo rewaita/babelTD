@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { AIRDROP, ENEMY_SCALING, POINTS, SAVE, STATUS, TOWER, WORKERS } from '../config/balance';
 import { ENEMIES, ENEMY_BY_ID } from '../config/enemies';
-import { SYNERGY, TRAP_BY_ID } from '../config/traps';
+import { SYNERGY, TRAP_BY_ID, TRAP_INTERVAL, TRAP_TARGETS } from '../config/traps';
 import { GENIUS, GOD } from '../config/god';
 import { slotIndexRange, slotS } from './geometry';
 import { computeSlotEffect } from './slotEffect';
@@ -314,5 +314,42 @@ describe('M5: セーブ＆ロード', () => {
     const evs = b.drainEvents();
     expect(evs.some((e) => e.type === 'godStarted' || e.type === 'lightning')).toBe(true);
     expect(b.bonusGods).toBe(a.godEffects.length - 1);
+  });
+});
+
+describe('トラップの発動間隔', () => {
+  it('ダメージ系は間隔ごとに、範囲内で頂上に近い敵から TRAP_TARGETS 体だけを攻撃する', () => {
+    const w = new World(1);
+    w.points = 1000;
+    w.placeTrap(1, 'spike');
+    const pos = slotS(1);
+    // 範囲内に3体並べる（頂上に近い順に front, mid, back）
+    const back = w.spawnEnemy(ENEMIES[0], pos - 0.02);
+    const mid = w.spawnEnemy(ENEMIES[0], pos);
+    const front = w.spawnEnemy(ENEMIES[0], pos + 0.02);
+    for (const e of [back, mid, front]) {
+      e.hp = e.maxHp = 1e6;
+      e.speed = 0; // 動かないようにして、範囲内に留める
+    }
+    w.update(1 / 60);
+    const hit = [back, mid, front].filter((e) => e.hp < 1e6);
+    expect(hit.length).toBe(TRAP_TARGETS);
+    expect(front.hp).toBeCloseTo(1e6 - TRAP_BY_ID.spike.dps! * TRAP_INTERVAL.damage);
+    // 間隔が来るまでは次の攻撃をしない
+    const after = front.hp;
+    w.update(1 / 60);
+    expect(front.hp).toBe(after);
+  });
+
+  it('遅延系は間隔なしで、範囲内の全員を減速させる', () => {
+    const w = new World(1);
+    w.points = 1000;
+    w.placeTrap(1, 'glue');
+    const pos = slotS(1);
+    const a = w.spawnEnemy(ENEMIES[0], pos - 0.02);
+    const b = w.spawnEnemy(ENEMIES[0], pos + 0.02);
+    w.update(1 / 60);
+    expect(a.currentSlow).toBeGreaterThan(0);
+    expect(b.currentSlow).toBeGreaterThan(0);
   });
 });

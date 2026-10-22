@@ -16,6 +16,8 @@ export const UI = {
   /** トラップのカード */
   CARD: 0x2a2046,
   CARD_LOCKED: 0x1d1730,
+  /** 選んでいるトラップのカード */
+  CARD_SELECTED: 0x4a3a1e,
   /** 文字色 */
   TEXT: '#f4ead5',
   TEXT_SUB: '#b9a9d9',

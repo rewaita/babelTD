@@ -311,26 +311,43 @@ export class TowerRenderer {
     g.fillGradientStyle(C.HORDE_TOP, C.HORDE_TOP, C.HORDE_BOTTOM, C.HORDE_BOTTOM, 1);
     g.fillRect(0, yTop, v.width, Math.max(0, v.height - yTop));
 
-    // 上端のうねり（下にいる敵が多いほど激しい）
-    const intensity = Math.min(1.6, 0.6 + hiddenEnemies / 60);
+    // 下にいる敵の多さ（0〜1）。多いほど上端に頭が密集し、目が増える
+    const density = Math.min(1, hiddenEnemies / ANIM.HORDE_FULL_COUNT);
+    const speed = ANIM.HORDE_WAVE_SPEED;
+
+    // 上端のうねり
     const bumps = 14;
     const step = v.width / bumps;
-    const speed = ANIM.HORDE_WAVE_SPEED;
     g.fillStyle(C.HORDE_TOP, 1);
     for (let k = 0; k <= bumps; k++) {
-      const r = (24 + 12 * Math.sin(time * speed + k * 1.9)) * intensity * zk;
+      const r = (24 + 12 * Math.sin(time * speed + k * 1.9)) * (0.7 + 0.6 * density) * zk;
       g.fillCircle(k * step, yTop + 6, r);
     }
-    // 赤い目（ちらちら瞬く）
-    const eyes = Math.min(16, 3 + Math.floor(hiddenEnemies / 8));
+
+    // ひしめく頭（奥の列ほど暗く小さい）。位置は番号から決めるので毎フレーム同じ場所で揺れる
+    const heads = Math.round(ANIM.HORDE_MAX_HEADS * density);
+    for (let k = 0; k < heads; k++) {
+      const row = k % 3;
+      const x = (k * 61.7 + row * 23) % (v.width + 40) - 20;
+      const bob = Math.sin(time * (speed * 2.2) + k * 2.7) * 6 * zk;
+      const y = yTop - (8 - row * 10) * zk + bob;
+      const r = (16 - row * 3 + (k % 5)) * zk;
+      g.fillStyle(lerpColor(C.HORDE_EDGE, C.HORDE_TOP, row / 2), 1);
+      g.fillCircle(x, y, r);
+    }
+
+    // 赤い目（ちらちら瞬く）。多いほど深いところまで光る
+    const eyes = Math.round(4 + (ANIM.HORDE_MAX_EYES - 4) * density);
+    const depth = (40 + 260 * density) * zk;
     for (let k = 0; k < eyes; k++) {
       const blink = Math.sin(time * 2.3 + k * 7.1);
       if (blink < -0.3) continue;
-      const x = ((k * 97.3) % v.width);
-      const y = yTop + 18 + ((k * 37) % 60) * zk;
-      g.fillStyle(C.HORDE_EYE, 0.6 + 0.4 * blink);
-      g.fillEllipse(x - 5, y, 6, 4);
-      g.fillEllipse(x + 5, y, 6, 4);
+      const x = (k * 97.3) % v.width;
+      const y = yTop + 10 * zk + ((k * 37.9) % 100) / 100 * depth;
+      const size = zk * (k < heads ? 1.2 : 0.9);
+      g.fillStyle(C.HORDE_EYE, 0.5 + 0.5 * blink);
+      g.fillEllipse(x - 5 * size, y, 6 * size, 4 * size);
+      g.fillEllipse(x + 5 * size, y, 6 * size, 4 * size);
     }
   }
 

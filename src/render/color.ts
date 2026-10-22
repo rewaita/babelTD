@@ -15,8 +15,3 @@ export function lerpColor(a: number, b: number, t: number): number {
 export function shade(color: number, amount: number): number {
   return amount >= 0 ? lerpColor(color, 0xffffff, amount) : lerpColor(color, 0x000000, -amount);
 }
-
-/** 0xRRGGBB → '#rrggbb' */
-export function toCss(color: number): string {
-  return '#' + color.toString(16).padStart(6, '0');
-}

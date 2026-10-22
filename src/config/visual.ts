@@ -90,6 +90,8 @@ export const TOWER_LOOK = {
     GROUND: 0x3a3024,
     GROUND_LIGHT: 0x55462f,
     HORDE_TOP: 0x4a1a63,
+    /** 敵の集団の上端に並ぶ頭の色（手前の列） */
+    HORDE_EDGE: 0x6b2a8a,
     HORDE_BOTTOM: 0x14061e,
     HORDE_EYE: 0xff4f6e,
     /** 空の色：地上付近 */
@@ -182,12 +184,17 @@ export const ANIM = {
   FLOAT_TEXT_MS: 800,
   /** 画面中央の通知の表示時間 */
   TOAST_MS: 1800,
-  /** トラップをドラッグ中、指からどれだけ上にアイコンを表示するか（指で隠れないように） */
+  /** 天才をドラッグ中、指からどれだけ上にアイコンを表示するか（指で隠れないように） */
   PLACE_GHOST_OFFSET_Y: 70,
-  /** ドラッグ中のアイコンがこの距離（px）以内の穴に吸い付く */
+  /** 天才をドラッグ中、この距離（px）以内の穴を使い先として選ぶ */
   HOLE_SNAP_RADIUS: 60,
   /** ダブルタップとみなす間隔（ミリ秒） */
   DOUBLE_TAP_MS: 380,
   /** 敵の集団のうねりの速さ */
   HORDE_WAVE_SPEED: 1.6,
+  /** 敵の集団: この数の敵が下に隠れていると「最大の密度」で描く */
+  HORDE_FULL_COUNT: 800,
+  /** 敵の集団: 上端にひしめく頭の最大数と、光る目の最大数 */
+  HORDE_MAX_HEADS: 60,
+  HORDE_MAX_EYES: 70,
 };

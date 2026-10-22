@@ -10,10 +10,13 @@
  * 約0.083 で隣の穴との中間まで届きます。
  *
  * 系統ごとの性質:
- *   ダメージ … 範囲内の敵に継続ダメージ。学習の影響なし
- *   遅延     … 減速。連続してかかった秒数に応じて効果が減衰（balance.ts の SLOW）
- *   状態異常 … 範囲を出た後も効果が続く。同じ個体にかかった回数に応じて効果が減衰（balance.ts の STATUS）
- *   強制移動 … 敵を後ろへ戻す。同じ個体が受けるほど回避されやすくなる＝学習（balance.ts の FORCE）
+ *   ダメージ … TRAP_INTERVAL 秒ごとに、範囲内の敵を狙って攻撃する。学習の影響なし
+ *   遅延     … 範囲内の敵すべてを常に減速。連続してかかった秒数に応じて効果が減衰（balance.ts の SLOW）
+ *   状態異常 … 間隔ごとに敵を狙ってかける。範囲を出た後も続き、同じ個体にかかった回数に応じて減衰（STATUS）
+ *   強制移動 … 間隔ごとに敵を狙って後ろへ戻す。同じ個体が受けるほど回避されやすくなる＝学習（FORCE）
+ *
+ * 間隔のある系統は、1回の発動で TRAP_TARGETS 体だけを狙う（範囲内で最も頂上に近い敵から）。
+ * そのため敵の数が多いほど、さばききれずに抜けてくる。
  */
 
 /** トラップの系統 */
@@ -46,7 +49,7 @@ export interface TrapDef {
   unlockFloor: number;
   /** 効果範囲（階、穴の中心からの片側） */
   range: number;
-  /** 【ダメージ】範囲内の敵に与える毎秒ダメージ */
+  /** 【ダメージ】狙った敵に与える毎秒ダメージ（1回の攻撃 = dps × ダメージ系の発動間隔） */
   dps?: number;
   /** 【遅延】スロウ率（0.5 = 50%減速） */
   slow?: number;
@@ -73,7 +76,7 @@ export const TRAPS: TrapDef[] = [
   {
     id: 'spike',
     name: '棘の罠',
-    description: '通過する敵に継続ダメージ',
+    description: '範囲内の敵を1体ずつ素早く連続攻撃',
     category: 'damage',
     cost: 40,
     unlockFloor: 0,
@@ -85,7 +88,7 @@ export const TRAPS: TrapDef[] = [
   {
     id: 'glue',
     name: '粘着の罠',
-    description: '敵を減速させる（受け続けると効果が弱まる）',
+    description: '範囲内の敵すべてを減速（受け続けると効果が弱まる）',
     category: 'delay',
     cost: 50,
     unlockFloor: 0,
@@ -97,7 +100,7 @@ export const TRAPS: TrapDef[] = [
   {
     id: 'poison',
     name: '毒の罠',
-    description: '毒で継続ダメージ。範囲を出ても続く（同じ敵には効きが弱まる）',
+    description: '0.5秒ごとに1体を毒にする。範囲を出ても続く（同じ敵には効きが弱まる）',
     category: 'status',
     cost: 70,
     unlockFloor: 5,
@@ -109,7 +112,7 @@ export const TRAPS: TrapDef[] = [
   {
     id: 'gust',
     name: '突風の罠',
-    description: '敵を後ろへ押し戻す（同じ敵ほど見切られやすい）',
+    description: '1秒ごとに1体を後ろへ押し戻す（同じ敵ほど見切られやすい）',
     category: 'force',
     cost: 80,
     unlockFloor: 8,
@@ -121,7 +124,7 @@ export const TRAPS: TrapDef[] = [
   {
     id: 'blade',
     name: '回転刃',
-    description: '強力な継続ダメージ',
+    description: '範囲内の敵を1体ずつ強力に連続攻撃',
     category: 'damage',
     cost: 95,
     unlockFloor: 10,
@@ -133,7 +136,7 @@ export const TRAPS: TrapDef[] = [
   {
     id: 'weaken',
     name: '脆化の呪符',
-    description: '敵が受けるダメージを増やす。範囲を出ても続く',
+    description: '0.5秒ごとに1体の被ダメージを増やす。範囲を出ても続く',
     category: 'status',
     cost: 90,
     unlockFloor: 15,
@@ -145,7 +148,7 @@ export const TRAPS: TrapDef[] = [
   {
     id: 'bell',
     name: '鈍重の鐘',
-    description: '広い範囲の敵を強く減速させる',
+    description: '広い範囲の敵すべてを強く減速',
     category: 'delay',
     cost: 120,
     unlockFloor: 20,
@@ -157,7 +160,7 @@ export const TRAPS: TrapDef[] = [
   {
     id: 'pit',
     name: '落とし穴',
-    description: '敵を塔の一段下へ落とす（同じ敵ほど見切られやすい）',
+    description: '1秒ごとに1体を塔の一段下へ落とす（同じ敵ほど見切られやすい）',
     category: 'force',
     cost: 150,
     unlockFloor: 25,
@@ -169,6 +172,21 @@ export const TRAPS: TrapDef[] = [
 ];
 
 export const TRAP_BY_ID: Record<string, TrapDef> = Object.fromEntries(TRAPS.map((t) => [t.id, t]));
+
+/**
+ * 系統ごとの発動間隔（秒）
+ *   0 なら間隔なし: 範囲内の敵すべてに常に効く（遅延系）
+ *   0 より大きければ: その秒数ごとに TRAP_TARGETS 体を狙って発動する
+ */
+export const TRAP_INTERVAL: Record<TrapCategory, number> = {
+  damage: 0.1,
+  delay: 0,
+  status: 0.5,
+  force: 1,
+};
+
+/** 間隔のある系統が、1回の発動で狙う敵の数 */
+export const TRAP_TARGETS = 1;
 
 /**
  * 同じ穴に入れた2つのトラップの組み合わせ（シナジー）

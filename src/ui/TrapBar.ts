@@ -3,9 +3,9 @@
  *  画面下部のトラップ一覧
  * ============================================================
  * カードの操作:
- *   - 上方向へドラッグ … トラップを持ち上げて、塔の穴へ設置（GameScene 側で処理）
- *   - 左右へドラッグ   … 一覧をスクロール（カードが画面に収まらないとき）
- *   - タップ           … 説明を表示
+ *   - タップ         … そのトラップを選ぶ（選んだまま塔の穴をタップすると、続けて設置できる）。
+ *                      選んでいるカードをもう一度タップすると選ぶのをやめる（GameScene 側で処理）
+ *   - 左右へドラッグ … 一覧をスクロール（カードが画面に収まらないとき）
  *
  * 技術封印中のカードには「封印」、天才で強化したカードには ★レベル を表示する。
  */
@@ -21,6 +21,8 @@ import { makeText } from './widgets';
 const CARD_W = 128;
 const CARD_H = 140;
 const CARD_GAP = 12;
+/** 選んでいるカードを持ち上げる量（px） */
+const SELECTED_LIFT = 10;
 
 interface Card {
   def: TrapDef;
@@ -39,15 +41,18 @@ export class TrapBar {
   private readonly cards: Card[] = [];
   private scroll = 0;
   private readonly maxScroll: number;
-  private pending: { def: TrapDef; startX: number; startY: number; startScroll: number; mode: 'none' | 'drag' | 'scroll' } | null = null;
+  private pending: { def: TrapDef; startX: number; startScroll: number; scrolling: boolean } | null = null;
+  /** 選んでいるトラップ（枠を光らせる） */
+  private selectedId: string | null = null;
+  /** 天才をドラッグ中に、ドロップ先として光らせるカード */
+  private highlightId: string | null = null;
 
   constructor(
     scene: Phaser.Scene,
     private readonly x: number,
     y: number,
     width: number,
-    private readonly onDragStart: (def: TrapDef, pointer: Phaser.Input.Pointer) => void,
-    private readonly onInfo: (def: TrapDef) => void,
+    private readonly onSelect: (def: TrapDef) => void,
   ) {
     this.container = scene.add.container(x, y).setDepth(DEPTH.HUD + 1);
     const pad = 20;
@@ -65,7 +70,7 @@ export class TrapBar {
       this.container.add(c);
       bg.setInteractive({ useHandCursor: true });
       bg.on('pointerdown', (p: Phaser.Input.Pointer) => {
-        this.pending = { def, startX: p.x, startY: p.y, startScroll: this.scroll, mode: 'none' };
+        this.pending = { def, startX: p.x, startScroll: this.scroll, scrolling: false };
       });
       this.cards.push({ def, container: c, bg, icon, nameText: name, costText, lockText, levelText, state: '' });
     });
@@ -91,11 +96,13 @@ export class TrapBar {
       const level = world.trapLevel[def.id] ?? 0;
       const cost = num(def.cost, 100 + def.cost);
       const lit = this.highlightId === def.id;
-      const state = `${kind}|${level}|${textVersion()}|${cost}|${lit}`;
+      const selected = this.selectedId === def.id;
+      const state = `${kind}|${level}|${textVersion()}|${cost}|${lit}|${selected}`;
       if (state === card.state) continue;
       card.state = state;
-      card.bg.setFillStyle(unlocked && !sealed ? UI.CARD : UI.CARD_LOCKED);
-      card.bg.setStrokeStyle(lit ? 4 : 2, lit ? 0x7dff8a : UI.PANEL_EDGE);
+      card.bg.setFillStyle(selected ? UI.CARD_SELECTED : unlocked && !sealed ? UI.CARD : UI.CARD_LOCKED);
+      card.bg.setStrokeStyle(lit || selected ? 4 : 2, lit ? 0x7dff8a : selected ? 0xffd36b : UI.PANEL_EDGE);
+      card.container.y = CARD_H / 2 - (selected ? SELECTED_LIFT : 0);
       card.icon.setAlpha(kind === 'ok' ? 1 : kind === 'poor' ? 0.5 : 0.15);
       card.nameText.setText(tn(def.name));
       card.costText.setText(`◆${cost}`);
@@ -107,8 +114,12 @@ export class TrapBar {
     }
   }
 
+  /** 選んでいるトラップを設定する（null で解除） */
+  setSelected(defId: string | null): void {
+    this.selectedId = defId;
+  }
+
   /** 天才をドラッグ中に、ドロップ先のカードを強調する */
-  private highlightId: string | null = null;
   setHighlight(defId: string | null): void {
     this.highlightId = defId;
   }
@@ -126,27 +137,17 @@ export class TrapBar {
     const pd = this.pending;
     if (!pd || !p.isDown) return false;
     const dx = p.x - pd.startX;
-    const dy = p.y - pd.startY;
-    const th = CAMERA.DRAG_THRESHOLD;
-    if (pd.mode === 'none') {
-      if (-dy > th && -dy > Math.abs(dx)) {
-        pd.mode = 'drag';
-        this.onDragStart(pd.def, p);
-        return false;
-      }
-      if (Math.abs(dx) > th) pd.mode = 'scroll';
-    }
-    if (pd.mode === 'scroll') {
+    if (!pd.scrolling && Math.abs(dx) > CAMERA.DRAG_THRESHOLD) pd.scrolling = true;
+    if (pd.scrolling) {
       this.scroll = Phaser.Math.Clamp(pd.startScroll - dx, 0, this.maxScroll);
       this.container.x = this.x - this.scroll;
-      return true;
     }
-    return pd.mode === 'none';
+    return true;
   }
 
-  /** ポインタを離した。動かさずに離したら説明を出す */
+  /** ポインタを離した。スクロールせずに離したらカードを選んだことにする */
   handleUp(): void {
-    if (this.pending?.mode === 'none') this.onInfo(this.pending.def);
+    if (this.pending && !this.pending.scrolling) this.onSelect(this.pending.def);
     this.pending = null;
   }
 }

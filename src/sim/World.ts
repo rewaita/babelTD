@@ -10,11 +10,12 @@
  *   1. 建設  … 作業員の人数に応じて塔が伸びる
  *   2. 収入  … 時間でポイントが増える
  *   3. 出現  … 麓から敵が出てくる。空中投下は予告の後、塔の途中に降ってくる
- *   4. 侵攻  … 敵が坂道を登り、近くのトラップの効果を受ける
- *              （ダメージ・遅延・状態異常・強制移動。状態異常と強制移動は個体ごとに学習して効きが落ちる）
- *   5. 撃破  … 体力0の敵を取り除き、報酬を得る
- *   6. 攻撃  … 作業員に追いついた敵が作業員を攻撃する
- *   7. 神    … 神の妨害の発生と時間経過（config/god.ts）
+ *   4. 発動  … 間隔のあるトラップ（ダメージ・状態異常・強制移動）が、範囲内の敵を狙って発動する
+ *   5. 侵攻  … 敵が坂道を登る。遅延トラップは範囲内の敵すべてを減速させる
+ *              （状態異常と強制移動は個体ごとに学習して効きが落ちる）
+ *   6. 撃破  … 体力0の敵を取り除き、報酬を得る
+ *   7. 攻撃  … 作業員に追いついた敵が作業員を攻撃する
+ *   8. 神    … 神の妨害の発生と時間経過（config/god.ts）
  *
  * 天才は10階ごとに1人増え、useGenius() で使う。
  *
@@ -23,9 +24,9 @@
  */
 import { AIRDROP, ENEMY_SCALING, FORCE, POINTS, SAVE, SIM, SLOW, SPAWN, STATUS, TOWER, WORKERS } from '../config/balance';
 import { ENEMIES, ENEMY_BY_ID, type EnemyDef } from '../config/enemies';
-import { TRAPS, TRAP_BY_ID, type ForceKind, type TrapDef } from '../config/traps';
+import { TRAPS, TRAP_BY_ID, TRAP_INTERVAL, TRAP_TARGETS, type ForceKind, type TrapDef } from '../config/traps';
 import { GENIUS, GOD, type GodKind } from '../config/god';
-import { slotIndexRange, slotS as wallSlotS } from './geometry';
+import { SLOT_SPACING, slotS as wallSlotS } from './geometry';
 import { createRng, randInt, type Rng } from './rng';
 import { computeSlotEffect, emptyEffect, maxEffectRange } from './slotEffect';
 import {
@@ -54,7 +55,7 @@ export interface WorldSnapshot {
   points: number;
   workers: number[];
   workersAdded: number;
-  slots: { id: SlotId; traps: { defId: string; disabled?: boolean }[] }[];
+  slots: { id: SlotId; traps: { defId: string; disabled?: boolean }[]; cooldown: Slot['cooldown'] }[];
   enemies: (Omit<Enemy, 'def'> & { defId: string })[];
   pendingDrops: { id: number; s: number; defIds: string[]; timeLeft: number; big: boolean }[];
   kills: number;
@@ -71,16 +72,6 @@ export interface WorldSnapshot {
   rngState: number;
 }
 
-/** 敵1体が受けるトラップ効果の集計用（毎回オブジェクトを作らないよう使い回す） */
-interface EffectAccumulator {
-  dps: number;
-  slow: number;
-  decayMul: number;
-  /** 判定済みの強制移動の穴の範囲内にまだいるか */
-  insideForce: boolean;
-  /** このステップで受ける強制移動（最後にまとめて適用する） */
-  force: { kind: ForceKind; distance: number } | null;
-}
 
 export class World {
   /** 経過時間（ゲーム内秒） */
@@ -124,7 +115,17 @@ export class World {
   private nextUid = 1;
   private readonly rng: Rng;
   private readonly maxRange = maxEffectRange();
-  private readonly acc: EffectAccumulator = { dps: 0, slow: 0, decayMul: 1, insideForce: false, force: null };
+  /** 敵を坂道の位置の順に並べたもの（トラップの狙いを探す用。毎ステップ並べ直す） */
+  private sorted: Enemy[] = [];
+  /** 狙った敵を入れておく使い回しの配列 */
+  private readonly targets: Enemy[] = [];
+  /** 敵が増減したか（並べ替え用の配列を作り直す合図） */
+  private enemiesChanged = true;
+  /** 遅延トラップの入っている穴の数（0なら遅延の判定を丸ごと省く） */
+  private slowSlotCount = 0;
+  /** 敵1体が受ける遅延の集計用（takeSlow が書き込む） */
+  private slowAcc = 0;
+  private decayAcc = 1;
 
   constructor(seed: number = Date.now()) {
     this.rng = createRng(seed);
@@ -339,14 +340,17 @@ export class World {
     }
     this.updateAirdrops(dt);
 
-    // 4. 侵攻（とトラップの効果）
+    // 4. トラップの発動（間隔のある系統）
+    this.fireTraps(dt);
+
+    // 5. 侵攻（と遅延）
     let attackDps = 0;
     for (const e of this.enemies) {
       this.updateEnemy(e, dt);
       if (e.attacking && e.hp > 0) attackDps += e.attack;
     }
 
-    // 5. 撃破
+    // 6. 撃破
     if (this.enemies.some((e) => e.hp <= 0)) {
       const alive: Enemy[] = [];
       for (const e of this.enemies) {
@@ -359,38 +363,139 @@ export class World {
         }
       }
       this.enemies = alive;
+      this.enemiesChanged = true;
     }
 
-    // 6. 作業員への攻撃
+    // 7. 作業員への攻撃
     if (attackDps > 0) this.damageWorkers(attackDps * dt);
 
-    // 7. 神の妨害
+    // 8. 神の妨害
     this.updateGod(dt);
   }
 
-  private updateEnemy(e: Enemy, dt: number): void {
-    // 周りの穴から受ける効果を集計
-    const acc = this.acc;
-    acc.dps = 0;
-    acc.slow = 0;
-    acc.decayMul = 1;
-    acc.insideForce = false;
-    acc.force = null;
-    const [first, last] = slotIndexRange(e.s - this.maxRange, e.s + this.maxRange);
-    for (let i = Math.max(0, first); i <= last; i++) {
-      // 跳ね型は一個飛ばしで穴を踏むので、偶奇が合わない穴は無視する
-      if (e.jumpParity >= 0 && (i & 1) !== e.jumpParity) continue;
-      const slot = this.slots.get(i);
-      if (slot) this.applySlot(e, slot, wallSlotS(i), 1);
+  // ------------------------------------------------------------
+  //  トラップの発動
+  // ------------------------------------------------------------
+
+  /**
+   * 間隔のある系統（ダメージ・状態異常・強制移動）を発動する。
+   * 穴ごと・系統ごとに待ち時間があり、0になったら範囲内の敵を TRAP_TARGETS 体狙う。
+   * 狙う敵がいなければ待ち時間は0のまま（敵が入ってきた瞬間に発動する）。
+   */
+  private fireTraps(dt: number): void {
+    // 位置の順に並べ直す。前のステップの並びを使い回すので、ほぼ並んだ状態からの並べ替えで軽い
+    const sorted = this.sorted;
+    if (sorted.length !== this.enemies.length || this.enemiesChanged) {
+      this.sorted = this.enemies.slice();
+      this.enemiesChanged = false;
     }
-    // 作業員の横の穴: 作業員が攻撃される場所を中心に、広めの範囲で効く
+    this.sorted.sort((a, b) => a.s - b.s);
+
     const defendCenter = this.workerS - WORKERS.SIDE_SLOT_DEFEND_CENTER;
-    for (const id of WORKER_SLOT_IDS) {
-      const slot = this.slots.get(id);
-      if (slot) this.applySlot(e, slot, defendCenter, WORKERS.SIDE_SLOT_RANGE_MUL);
+    const targets = this.targets;
+    for (const slot of this.slots.values()) {
+      const eff = slot.effect;
+      const cd = slot.cooldown;
+      // 作業員の横の穴は、作業員が攻撃される場所を中心に広めの範囲で効く
+      const pos = slot.id < 0 ? defendCenter : wallSlotS(slot.id);
+      const rangeMul = slot.id < 0 ? WORKERS.SIDE_SLOT_RANGE_MUL : 1;
+      let active = false;
+
+      // ダメージ: 1回の攻撃で dps × 間隔 のダメージ（倒しきれる分を超えて狙わない）
+      if (eff.dps > 0 && (cd.damage -= dt) <= 0) {
+        if (this.findTargets(slot.id, pos, eff.dmgRange * rangeMul, 'damage')) {
+          for (const e of targets) {
+            e.pendingDamage += eff.dps * TRAP_INTERVAL.damage;
+            e.hurtUntil = this.time + 0.15;
+          }
+          cd.damage = TRAP_INTERVAL.damage;
+          active = true;
+        } else cd.damage = 0;
+      }
+
+      // 状態異常: その穴の異常（最大2種類）をまとめてかける
+      if (eff.statuses.length > 0 && (cd.status -= dt) <= 0) {
+        if (this.findTargets(slot.id, pos, eff.statusRange * rangeMul, 'status')) {
+          for (const e of targets) {
+            for (const st of eff.statuses) {
+              if (Math.abs(e.s - pos) <= st.range * rangeMul) this.applyStatus(e, st, slot.id);
+            }
+          }
+          cd.status = TRAP_INTERVAL.status;
+          active = true;
+        } else cd.status = 0;
+      }
+
+      // 強制移動: 見切られる（回避される）こともある
+      const force = eff.force;
+      if (force && (cd.force -= dt) <= 0) {
+        if (this.findTargets(slot.id, pos, force.range * rangeMul, 'force')) {
+          for (const e of targets) {
+            if (!this.tryForce(e, force.kind)) continue;
+            e.s = Math.max(0, e.s - force.distance);
+            e.attacking = false;
+            this.events.push({ type: 'forced', s: e.s, kind: force.kind, uid: e.uid });
+          }
+          cd.force = TRAP_INTERVAL.force;
+          active = true;
+        } else cd.force = 0;
+      }
+
+      if (active) slot.activeUntil = this.time + 0.15;
     }
-    // 強制移動の穴の範囲を出たら、次に踏んだときにまた判定する
-    if (!acc.insideForce) e.forceSlot = null;
+  }
+
+  /**
+   * 穴の範囲 [pos - range, pos + range] にいる敵のうち、頂上に近い方から TRAP_TARGETS 体を this.targets に入れる
+   *   跳ね型は踏まない穴からは狙われない
+   *   damage … すでに倒しきれる分のダメージが決まっている敵は狙わない
+   *   status … 状態異常が効かない敵は狙わない
+   * @returns 1体以上見つかったら true
+   */
+  private findTargets(slotId: SlotId, pos: number, range: number, kind: 'damage' | 'status' | 'force'): boolean {
+    const sorted = this.sorted;
+    const targets = this.targets;
+    targets.length = 0;
+    // 範囲の上端以下で、いちばん頂上に近い敵の位置を二分探索で探す
+    let lo = 0;
+    let hi = sorted.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (sorted[mid].s <= pos + range) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo - 1; i >= 0 && targets.length < TRAP_TARGETS; i--) {
+      const e = sorted[i];
+      if (e.s < pos - range) break;
+      if (slotId >= 0 && e.jumpParity >= 0 && (slotId & 1) !== e.jumpParity) continue;
+      if (kind === 'damage' && e.hp - e.pendingDamage <= 0) continue;
+      if (kind === 'status' && e.def.statusImmune) continue;
+      targets.push(e);
+    }
+    return targets.length > 0;
+  }
+
+  // ------------------------------------------------------------
+  //  敵の移動・遅延・状態異常の経過
+  // ------------------------------------------------------------
+
+  private updateEnemy(e: Enemy, dt: number): void {
+    // 遅延: 範囲内のすべての遅延トラップのうち、一番強いものを受ける（間隔なし・全員に効く）
+    this.slowAcc = 0;
+    this.decayAcc = 1;
+    if (this.slowSlotCount > 0) {
+      const first = Math.max(0, Math.ceil((e.s - this.maxRange) / SLOT_SPACING - 0.5));
+      const last = Math.floor((e.s + this.maxRange) / SLOT_SPACING - 0.5);
+      for (let i = first; i <= last; i++) {
+        // 跳ね型は一個飛ばしで穴を踏むので、偶奇が合わない穴は無視する
+        if (e.jumpParity >= 0 && (i & 1) !== e.jumpParity) continue;
+        this.takeSlow(e, this.slots.get(i), wallSlotS(i), 1);
+      }
+      const defendCenter = this.workerS - WORKERS.SIDE_SLOT_DEFEND_CENTER;
+      for (const id of WORKER_SLOT_IDS) this.takeSlow(e, this.slots.get(id), defendCenter, WORKERS.SIDE_SLOT_RANGE_MUL);
+    }
+    const slowBase = this.slowAcc;
+    const decayMul = this.decayAcc;
 
     // 状態異常の経過（毒のダメージ・脆化の倍率）
     let dot = 0;
@@ -408,7 +513,7 @@ export class World {
     }
 
     // 遅延の減衰: 連続して受けるほど効果が弱まる
-    if (acc.slow > 0) {
+    if (slowBase > 0) {
       e.slowExposure += dt;
       e.slowIdle = 0;
     } else {
@@ -416,22 +521,13 @@ export class World {
       if (e.slowIdle >= SLOW.RESET_TIME) e.slowExposure = 0;
     }
     const slow =
-      acc.slow > 0
-        ? Math.min(SLOW.MAX_SLOW, acc.slow * Math.exp(-e.slowExposure / (SLOW.DECAY_TIME * acc.decayMul)))
-        : 0;
+      slowBase > 0 ? Math.min(SLOW.MAX_SLOW, slowBase * Math.exp(-e.slowExposure / (SLOW.DECAY_TIME * decayMul))) : 0;
     e.currentSlow = slow;
-    e.hurt = acc.dps > 0 || dot > 0;
-    e.hp -= (acc.dps + dot) * damageMul * dt;
 
-    // 強制移動（押し戻し・落下）
-    // （applySlot の中で書き換わるので、型の絞り込みを外して読み直す）
-    const force = acc.force as EffectAccumulator['force'];
-    if (force) {
-      e.s = Math.max(0, e.s - force.distance);
-      e.attacking = false;
-      this.events.push({ type: 'forced', s: e.s, kind: force.kind, uid: e.uid });
-      return;
-    }
+    // ダメージ（トラップの攻撃 ＋ 毒）。脆化中は増える
+    e.hp -= (e.pendingDamage + dot * dt) * damageMul;
+    e.pendingDamage = 0;
+    e.hurt = e.hurtUntil > this.time || dot > 0;
 
     // 移動: 作業員の少し手前まで進む（追いついたら攻撃開始）
     const limit =
@@ -441,48 +537,19 @@ export class World {
     e.attacking = e.s >= limit - 1e-6;
   }
 
-  /** 1つの穴の効果を敵に与える */
-  private applySlot(e: Enemy, slot: Slot, slotPos: number, rangeMul: number): void {
-    if (slot.traps.length === 0) return;
-    const eff = slot.effect;
-    const d = Math.abs(e.s - slotPos);
-    if (d > eff.maxRange * rangeMul) return;
-    let active = false;
-
-    if (eff.dps > 0 && d <= eff.dmgRange * rangeMul) {
-      this.acc.dps += eff.dps;
-      active = true;
-    }
-    if (eff.slow > 0 && d <= eff.slowRange * rangeMul) {
-      this.acc.slow = Math.max(this.acc.slow, eff.slow);
-      this.acc.decayMul = Math.max(this.acc.decayMul, eff.slowDecayMul);
-      active = true;
-    }
-    if (!e.def.statusImmune) {
-      for (const st of eff.statuses) {
-        if (d <= st.range * rangeMul) {
-          this.applyStatus(e, st, slot.id);
-          active = true;
-        }
-      }
-    }
-    if (eff.force && d <= eff.force.range * rangeMul) {
-      if (e.forceSlot === slot.id) {
-        this.acc.insideForce = true; // 判定済み。範囲を出るまで何もしない
-      } else if (e.forceSlot === null && !this.acc.force) {
-        e.forceSlot = slot.id;
-        this.acc.insideForce = true;
-        if (this.tryForce(e, eff.force.kind)) this.acc.force = { kind: eff.force.kind, distance: eff.force.distance };
-        active = true;
-      }
-    }
-    if (active) slot.activeUntil = this.time + 0.15;
+  /** 遅延トラップの範囲内なら、その強さを slowAcc / decayAcc に集める */
+  private takeSlow(e: Enemy, slot: Slot | undefined, pos: number, rangeMul: number): void {
+    if (!slot || slot.effect.slow <= 0) return;
+    if (Math.abs(e.s - pos) > slot.effect.slowRange * rangeMul) return;
+    this.slowAcc = Math.max(this.slowAcc, slot.effect.slow);
+    this.decayAcc = Math.max(this.decayAcc, slot.effect.slowDecayMul);
+    slot.activeUntil = this.time + 0.15;
   }
 
   /**
    * 状態異常をかける。
    * 別の穴で新しくかかるたびに「回数」が増え、回数に応じて強さが弱まる（学習）。
-   * 同じ穴の範囲にいる間は、持続時間を延ばすだけ。
+   * 同じ穴に続けてかけられたときは、持続時間を延ばすだけ。
    */
   private applyStatus(e: Enemy, st: StatusEffect, slotId: SlotId): void {
     const kind = st.kind;
@@ -570,6 +637,7 @@ export class World {
   }
 
   private spawnWave(): void {
+    if (this.enemies.length >= SPAWN.MAX_ALIVE) return; // 処理の重さの上限
     const def = this.pickEnemyDef();
     const count = this.rng() < SPAWN.GROUP_CHANCE ? randInt(this.rng, SPAWN.GROUP_MIN, SPAWN.GROUP_MAX) : 1;
     for (let k = 0; k < count; k++) this.spawnEnemy(def, -k * SPAWN.GROUP_SPACING);
@@ -608,11 +676,13 @@ export class World {
       statusCount: {},
       statusLastSlot: {},
       forceCount: {},
-      forceSlot: null,
+      pendingDamage: 0,
+      hurtUntil: 0,
       hurt: false,
       attacking: false,
     };
     this.enemies.push(enemy);
+    this.enemiesChanged = true;
     return enemy;
   }
 
@@ -839,6 +909,7 @@ export class World {
       slots: [...this.slots.values()].map((slot) => ({
         id: slot.id,
         traps: slot.traps.map((t) => (t.disabled ? { defId: t.def.id, disabled: true } : { defId: t.def.id })),
+        cooldown: { ...slot.cooldown },
       })),
       enemies: this.enemies.map(({ def, ...rest }) => structuredClone({ ...rest, defId: def.id })),
       pendingDrops: this.pendingDrops.map((d) => ({ id: d.id, s: d.s, defIds: d.defs.map((x) => x.id), timeLeft: d.timeLeft, big: d.big })),
@@ -877,6 +948,8 @@ export class World {
           w.refreshSlot(s);
         }
       }
+      const restored = w.slots.get(slot.id);
+      if (restored) restored.cooldown = { ...slot.cooldown };
     }
     w.enemies = snap.enemies
       .filter((e) => ENEMY_BY_ID[e.defId])
@@ -949,7 +1022,7 @@ export class World {
   private addTrapToSlot(id: SlotId, def: TrapDef): void {
     let slot = this.slots.get(id);
     if (!slot) {
-      slot = { id, traps: [], effect: emptyEffect(), activeUntil: 0 };
+      slot = { id, traps: [], effect: emptyEffect(), cooldown: { damage: 0, status: 0, force: 0 }, activeUntil: 0 };
       this.slots.set(id, slot);
     }
     slot.traps.push({ uid: this.nextUid++, def });
@@ -957,10 +1030,10 @@ export class World {
   }
 
   private refreshSlot(slot: Slot): void {
-    if (slot.traps.length === 0) {
-      this.slots.delete(slot.id);
-      return;
-    }
-    slot.effect = computeSlotEffect(slot.traps, (def) => this.powerMul(def));
+    if (slot.traps.length === 0) this.slots.delete(slot.id);
+    else slot.effect = computeSlotEffect(slot.traps, (def) => this.powerMul(def));
+    let n = 0;
+    for (const sl of this.slots.values()) if (sl.effect.slow > 0) n++;
+    this.slowSlotCount = n;
   }
 }

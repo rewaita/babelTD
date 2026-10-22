@@ -5,7 +5,7 @@
  * シミュレーション（World）・描画（Renderer）・UI をつなぐ司令塔。
  *
  * 操作の振り分け:
- *   - 画面下部のカードを上へドラッグ … トラップ設置（穴に重ねると強調表示）
+ *   - 画面下部のカードをタップ     … トラップを選ぶ。選んだまま空きのある穴をタップすると設置（続けて何個でも）
  *   - 設置済みの穴をダブルタップ   … 撤去・移動の小窓
  *   - 作業員（＋作業員ラベル）をタップ … 作業員を追加
  *   - それ以外の塔の部分をスワイプ … カメラ移動（回転しながら上下）
@@ -16,7 +16,6 @@
  */
 import Phaser from 'phaser';
 import { ANIM, CAMERA, DEPTH, TOWER_LOOK, VIEW } from '../config/visual';
-import { TOWER } from '../config/balance';
 import type { TrapDef } from '../config/traps';
 import { World } from '../sim/World';
 import type { ActionResult, SlotId } from '../sim/types';
@@ -42,7 +41,7 @@ import { bgm } from '../audio/Bgm';
 import { loadBest, loadSettings, saveBest, saveSettings, type Settings } from '../settings';
 import { setConfusion, t, tn, type StrKey } from '../i18n/strings';
 import { DEBUG } from '../debug';
-import { SAVE } from '../config/balance';
+import { SAVE, TOWER } from '../config/balance';
 import { listSaves, writeSave, type SaveEntry } from '../saves';
 import { LoadDialog, resetPoints, type LoadMode } from '../ui/LoadDialog';
 
@@ -87,8 +86,8 @@ export class GameScene extends Phaser.Scene {
   private debugSpeed = 1;
   /** カメラのスワイプ中の情報 */
   private camDrag: { startX: number; startY: number; startH: number; startA: number; moved: boolean } | null = null;
-  /** トラップをドラッグ中の情報 */
-  private placing: { def: TrapDef; ghost: Phaser.GameObjects.Image; pointer: Phaser.Input.Pointer } | null = null;
+  /** 選んでいるトラップ（選んだまま穴をタップすると設置できる） */
+  private selected: TrapDef | null = null;
   /** 天才をドラッグ中の情報（ghost は動かし始めてから作る） */
   private geniusDrag: { startX: number; startY: number; ghost: Phaser.GameObjects.Image | null } | null = null;
   /** トラップの移動先を選んでいる最中の情報 */
@@ -110,7 +109,7 @@ export class GameScene extends Phaser.Scene {
     this.animTime = 0;
     this.debugSpeed = 1;
     this.camDrag = null;
-    this.placing = null;
+    this.selected = null;
     this.moving = null;
     this.lastTap = null;
     this.geniusDrag = null;
@@ -154,8 +153,7 @@ export class GameScene extends Phaser.Scene {
       0,
       h - VIEW.BOTTOM_BAR_HEIGHT + 92,
       w,
-      (def, p) => this.startPlacing(def, p),
-      (def) => this.toast.show(`${tn(def.name)}（${t(`category_${def.category}` as StrKey)}）\n${tn(def.description)}`),
+      (def) => this.selectTrap(def),
     );
     this.popup = new SlotPopup(this, w, h);
     this.menu = new Menu(this, w, h, this.settings, {
@@ -214,7 +212,10 @@ export class GameScene extends Phaser.Scene {
 
     const hidden = this.countHiddenEnemies();
     this.towerRenderer.draw(this.world, this.animTime, hidden);
-    if (this.placing) this.updatePlacingHover();
+    // トラップを選んでいる間は、置ける穴を光らせる
+    const sel = this.selected;
+    this.entities.placeable = sel ? (id) => this.world.canPlace(id, sel) === 'ok' : null;
+    this.trapBar.setSelected(sel?.id ?? null);
     this.entities.draw(this.world, this.towerRenderer.holes, this.animTime);
     this.dropIndicator.draw(this.world, this.animTime);
     this.lightningFx.draw(this.animTime);
@@ -283,7 +284,7 @@ export class GameScene extends Phaser.Scene {
     if (this.overview) {
       v.camH += (overviewCamH - v.camH) * k;
       v.camA += (this.followAngle() - v.camA) * k;
-    } else if (this.follow && !this.placing && !this.camDrag?.moved) {
+    } else if (this.follow && !this.camDrag?.moved) {
       v.camH += (this.followTarget() - v.camH) * k;
       v.camA += (this.followAngle() - v.camA) * k;
     }
@@ -307,7 +308,6 @@ export class GameScene extends Phaser.Scene {
 
   private toggleOverview(): void {
     this.overview = !this.overview;
-    this.cancelPlacing();
     this.cancelGeniusDrag();
     this.popup.close();
     if (!this.overview) this.follow = true;
@@ -335,10 +335,6 @@ export class GameScene extends Phaser.Scene {
         return;
       }
       if (this.trapBar.handleMove(p)) return;
-      if (this.placing) {
-        this.placing.pointer = p;
-        return;
-      }
       const d = this.camDrag;
       if (!d || !p.isDown) return;
       const dx = p.x - d.startX;
@@ -355,10 +351,6 @@ export class GameScene extends Phaser.Scene {
       this.trapBar.handleUp();
       if (this.geniusDrag) {
         this.finishGeniusDrag();
-        return;
-      }
-      if (this.placing) {
-        this.finishPlacing();
         return;
       }
       const d = this.camDrag;
@@ -405,6 +397,13 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    // トラップを選んでいて、空きのある穴をタップしたら設置（選んだままなので続けて置ける）
+    if (hole && this.selected && (this.world.getSlot(hole.id)?.traps.length ?? 0) < TOWER.TRAPS_PER_SLOT) {
+      const res = this.world.placeTrap(hole.id, this.selected.id);
+      this.feedback(res, hole, 'place', this.selected.cost);
+      return;
+    }
+
     if (hole) {
       const slot = this.world.getSlot(hole.id);
       if (!slot) return;
@@ -433,51 +432,27 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // ---- トラップの設置（ドラッグ） ----
+  // ---- トラップの選択（タップで選び、穴をタップで設置） ----
 
-  private startPlacing(def: TrapDef, pointer: Phaser.Input.Pointer): void {
+  /** カードをタップした: そのトラップを選ぶ（選んでいるカードなら解除） */
+  private selectTrap(def: TrapDef): void {
     if (this.isBlocked()) return;
-    if (!this.world.isUnlocked(def)) return this.denied('locked');
-    if (this.world.points < def.cost) return this.denied('notEnough');
+    if (this.selected === def) {
+      this.selected = null;
+      this.toast.hide();
+      return;
+    }
+    const info = `${tn(def.name)}（${t(`category_${def.category}` as StrKey)}）\n${tn(def.description)}`;
+    if (!this.world.isUnlocked(def)) {
+      this.toast.show(`${t('lockedAt', { n: def.unlockFloor })}\n${info}`, 2200, UI.TEXT_SUB);
+      return;
+    }
+    if (this.world.isSealed(def)) return this.denied('sealed');
     this.popup.close();
     this.moving = null;
-    const ghost = this.add
-      .image(pointer.x, pointer.y - ANIM.PLACE_GHOST_OFFSET_Y, `trap_${def.id}`)
-      .setDepth(DEPTH.GHOST)
-      .setAlpha(0.85)
-      .setScale(1.1);
-    this.placing = { def, ghost, pointer };
-  }
-
-  private updatePlacingHover(): void {
-    const pl = this.placing!;
-    const p = pl.pointer;
-    pl.ghost.setPosition(p.x, p.y - ANIM.PLACE_GHOST_OFFSET_Y);
-    const hole = this.towerRenderer.nearestHole(pl.ghost.x, pl.ghost.y, ANIM.HOLE_SNAP_RADIUS);
-    if (hole) {
-      const ok = this.world.canPlace(hole.id, pl.def) === 'ok';
-      this.entities.highlight = { id: hole.id, mode: ok ? 'ok' : 'ng' };
-      pl.ghost.setPosition(hole.x, hole.y);
-    } else {
-      this.entities.highlight = null;
-    }
-  }
-
-  private finishPlacing(): void {
-    const pl = this.placing;
-    if (!pl) return;
-    const hole = this.towerRenderer.nearestHole(pl.ghost.x, pl.ghost.y, ANIM.HOLE_SNAP_RADIUS);
-    if (hole) {
-      const res = this.world.placeTrap(hole.id, pl.def.id);
-      this.feedback(res, hole, 'place', pl.def.cost);
-    }
-    this.cancelPlacing();
-  }
-
-  private cancelPlacing(): void {
-    this.placing?.ghost.destroy();
-    this.placing = null;
     this.entities.highlight = null;
+    this.selected = def;
+    this.toast.show(`${info}\n${t('selectHint')}`, 2600, UI.TEXT_GOLD);
   }
 
   // ---- 天才（ドラッグして使う） ----
@@ -489,7 +464,6 @@ export class GameScene extends Phaser.Scene {
       this.toast.show(t('geniusNone'), 1500, UI.TEXT_DANGER);
       return;
     }
-    this.cancelPlacing();
     this.popup.close();
     this.moving = null;
     this.geniusDrag = { startX: p.x, startY: p.y, ghost: null };
@@ -706,7 +680,7 @@ export class GameScene extends Phaser.Scene {
           const best = loadBest();
           const isNew = ev.floor > best;
           if (isNew) saveBest(ev.floor);
-          this.cancelPlacing();
+          this.selected = null;
           this.cancelGeniusDrag();
           this.popup.close();
           this.moving = null;
@@ -743,7 +717,6 @@ export class GameScene extends Phaser.Scene {
   private openMenu(): void {
     if (this.world.gameOver) return;
     this.paused = true;
-    this.cancelPlacing();
     this.cancelGeniusDrag();
     this.popup.close();
     this.menu.open();

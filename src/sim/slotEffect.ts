@@ -13,6 +13,7 @@ export function emptyEffect(): SlotEffect {
     slowRange: 0,
     slowDecayMul: 1,
     statuses: [],
+    statusRange: 0,
     force: null,
     synergies: [],
     maxRange: 0,
@@ -94,7 +95,8 @@ export function computeSlotEffect(
     eff.synergies.push('status_damage');
   }
 
-  eff.maxRange = Math.max(eff.dmgRange, eff.slowRange, eff.force?.range ?? 0, ...eff.statuses.map((s) => s.range));
+  eff.statusRange = Math.max(0, ...eff.statuses.map((s) => s.range));
+  eff.maxRange = Math.max(eff.dmgRange, eff.slowRange, eff.force?.range ?? 0, eff.statusRange);
   return eff;
 }
 
